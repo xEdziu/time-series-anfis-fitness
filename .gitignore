@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dane osobiste z zegarka — nie commitujemy
+data/raw/*
+!data/raw/.gitkeep
+data/processed/
+runs/
+
+# Connect IQ
+watch/bin/
+watch/gen/
+watch/developer_key*
+*.der
+*.pem
