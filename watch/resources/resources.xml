@@ -1,0 +1,8 @@
+<resources>
+    <strings>
+        <string id="AppName">HR Forecast</string>
+    </strings>
+    <drawables>
+        <bitmap id="LauncherIcon" filename="drawables/launcher_icon.png"/>
+    </drawables>
+</resources>
