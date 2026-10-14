@@ -8,8 +8,8 @@ Porównujemy dwa modele tej dynamiki:
 
 | | LSTM (nauczyciel) | ANFIS (uczeń) |
 |---|---|---|
-| wejście | surowa sekwencja 120 s: tętno, prędkość, nachylenie | 4 cechy: tętno, zmiana tętna w 30 s, średnia prędkość 10 s, nachylenie 30 s |
-| rozmiar | ~50 tys. parametrów | ~430 parametrów (81 reguł Sugeno) |
+| wejście | surowa sekwencja 120 s: tętno, prędkość, nachylenie | 5 cech: tętno, zmiana tętna w 30 s, średnia prędkość 10 s i 60 s, nachylenie 30 s |
+| rozmiar | zespół 3 sieci, ~150 tys. parametrów | ~210 parametrów (32 reguły Sugeno) |
 | interpretowalność | brak | reguły „JEŚLI … TO …” i funkcje przynależności |
 | gdzie działa | GPU | na zegarku, w Monkey C |
 
@@ -26,9 +26,11 @@ src/hrforecast/
   lstm.py          LSTM
   prepare.py       hr-prepare: data/raw -> data/processed/samples.parquet
   train.py         hr-train: trening wszystkich modeli i metryki -> runs/<data>/
+  report.py        wykresy i tabele do sprawozdania -> runs/<data>/report/ (hr-report odtwarza je bez treningu)
   export_watch.py  hr-export: ANFIS -> watch/source/AnfisParams.mc
 watch/             pole danych Connect IQ (Monkey C) dla Fenixa 8
 docs/GARMIN.md     podłączenie zegarka, pobieranie danych, budowanie i wgrywanie
+docs/OPIS_PROJEKTU.md  szczegółowy opis kodu, treningu, wyników i każdego wykresu (także dla asystentów AI)
 ```
 
 ## Szybki start

@@ -97,7 +97,7 @@ W symulatorze:
 1. _Simulation → FIT Data → Playback File…_ i wybierz plik `.fit` z `data/raw/`.
    Symulator zacznie podawać tętno, prędkość, wysokość i dystans z tego treningu.
 2. Uruchom timer aktywności (_Simulation → Activity Data → Timer: Start_ lub odpowiednik w Twojej wersji SDK).
-   Pole pokazuje `--`, dopóki timer nie jest uruchomiony, a po starcie przez pierwsze 30 s, czyli do zapełnienia bufora.
+   Pole pokazuje `--`, dopóki timer nie jest uruchomiony, a po starcie przez pierwsze 60 s, czyli do zapełnienia bufora (średnia prędkość z 60 s).
 
 To jest dobre demo na obronę: obok widać aktualne tętno, a pole „HR +30s” wyprzedza je o pół minuty.
 
