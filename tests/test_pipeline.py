@@ -66,7 +66,7 @@ def test_anfis_learns_and_beats_persistence():
 def test_watch_export_matches_torch():
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
-    x = rng.normal([150, 0, 3, 0], [15, 5, 0.6, 0.03], size=(500, 4))
+    x = rng.normal([150, 0, 3, 3, 0], [15, 5, 0.6, 0.5, 0.03], size=(500, 5))
     model = ANFIS(x, n_mfs=3)
     with torch.no_grad():
         model.consequents.normal_()

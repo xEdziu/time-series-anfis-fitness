@@ -16,9 +16,10 @@ import pandas as pd
 import torch
 from torch import nn
 
+from hrforecast import report
 from hrforecast.anfis import ANFIS
 from hrforecast.features import ANFIS_FEATURES, SEQ_CHANNELS, SEQ_LEN, TARGET, usable_mask
-from hrforecast.lstm import HrLSTM
+from hrforecast.lstm import HrLSTM, LSTMEnsemble
 
 Inputs = Callable[[torch.Tensor], torch.Tensor]
 
@@ -93,14 +94,20 @@ def lse_batches(inputs: Inputs, target: torch.Tensor, idx: torch.Tensor, batch_s
 
 def metrics(pred: torch.Tensor, y: torch.Tensor) -> dict[str, float]:
     err = pred - y
-    return {"mae": err.abs().mean().item(), "rmse": err.pow(2).mean().sqrt().item()}
+    r2 = 1 - err.pow(2).sum() / (y - y.mean()).pow(2).sum()
+    return {"mae": err.abs().mean().item(), "rmse": err.pow(2).mean().sqrt().item(), "r2": r2.item()}
+
+
+def n_params(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters())
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path("data/processed/samples.parquet"))
     parser.add_argument("--sport", default="running", help="'all' = wszystkie sporty")
-    parser.add_argument("--n-mfs", type=int, default=3, help="liczba funkcji przynależności na wejście")
+    parser.add_argument("--n-mfs", type=int, default=2, help="liczba funkcji przynależności na wejście")
+    parser.add_argument("--n-lstm", type=int, default=3, help="liczba LSTM w zespole nauczyciela")
     parser.add_argument("--epochs-lstm", type=int, default=30)
     parser.add_argument("--epochs-anfis", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=1024)
@@ -145,49 +152,87 @@ def main() -> None:
     results: dict[str, dict[str, float]] = {}
     histories: dict[str, dict[str, list[float]]] = {}
 
+    test = idx["test"]
+    y_test = y[test]
+    test_pred: dict[str, torch.Tensor] = {}
+
+    def evaluate(name: str, pred: torch.Tensor, **extra: float) -> None:
+        test_pred[name] = pred
+        results[name] = metrics(pred, y_test) | extra
+
     # Punkty odniesienia
-    results["persystencja (dhr=0)"] = metrics(torch.zeros_like(y[idx["test"]]), y[idx["test"]])
+    evaluate("persystencja (dhr=0)", torch.zeros_like(y_test), parametry=0)
     a = np.c_[feats_np[train_rows], np.ones(len(train_rows))]
     coef, *_ = np.linalg.lstsq(a, df[TARGET].to_numpy()[train_rows], rcond=None)
-    lin = feats[idx["test"]] @ tensor(coef[:-1]) + coef[-1]
-    results["regresja liniowa"] = metrics(lin, y[idx["test"]])
+    evaluate("regresja liniowa", feats[test] @ tensor(coef[:-1]) + coef[-1], parametry=len(coef))
 
-    # LSTM (nauczyciel)
-    lstm = HrLSTM(len(SEQ_CHANNELS)).to(device)
-    histories["lstm"] = fit(lstm, seq_inputs, y, idx["train"], idx["val"],
-                            epochs=args.epochs_lstm, lr=1e-3, name="LSTM", **common)
-    results["LSTM"] = metrics(predict(lstm, seq_inputs, idx["test"]), y[idx["test"]])
+    # LSTM (nauczyciel): zespół niezależnie uczonych sieci, prognoza = średnia
+    t0 = time.perf_counter()
+    members = []
+    for i in range(args.n_lstm):
+        member = HrLSTM(len(SEQ_CHANNELS)).to(device)
+        histories[f"LSTM #{i + 1}"] = fit(member, seq_inputs, y, idx["train"], idx["val"],
+                                          epochs=args.epochs_lstm, lr=1e-3, name=f"LSTM #{i + 1}", **common)
+        results[f"LSTM #{i + 1} (pojedynczy)"] = metrics(predict(member, seq_inputs, test), y_test)
+        members.append(member)
+    lstm = LSTMEnsemble(members)
+    evaluate("LSTM", predict(lstm, seq_inputs, test), parametry=n_params(lstm),
+             czas_uczenia_s=time.perf_counter() - t0)
+
+    def train_anfis(name: str, target: torch.Tensor) -> tuple[ANFIS, ANFIS]:
+        """LSE + dostrajanie gradientowe; zwraca (model po samym LSE, model końcowy)."""
+        t0 = time.perf_counter()
+        model = ANFIS(feats_np[train_rows], args.n_mfs).to(device)
+        model.fit_consequents_lse(lse_batches(feat_inputs, target, idx["train"]))
+        lse_only = copy.deepcopy(model)
+        evaluate(f"{name} (tylko LSE)", predict(lse_only, feat_inputs, test), parametry=n_params(model),
+                 czas_uczenia_s=time.perf_counter() - t0)
+        histories[name] = fit(model, feat_inputs, target, idx["train"], idx["val"],
+                              epochs=args.epochs_anfis, lr=3e-3, name=name, **common)
+        evaluate(name, predict(model, feat_inputs, test), parametry=n_params(model),
+                 czas_uczenia_s=time.perf_counter() - t0)
+        return lse_only, model
 
     # ANFIS uczony na prawdziwym celu
-    anfis = ANFIS(feats_np[train_rows], args.n_mfs).to(device)
-    anfis.fit_consequents_lse(lse_batches(feat_inputs, y, idx["train"]))
-    histories["anfis"] = fit(anfis, feat_inputs, y, idx["train"], idx["val"],
-                             epochs=args.epochs_anfis, lr=3e-3, name="ANFIS", **common)
-    results["ANFIS"] = metrics(predict(anfis, feat_inputs, idx["test"]), y[idx["test"]])
+    anfis_lse, anfis = train_anfis("ANFIS", y)
 
     # ANFIS destylowany: cel = predykcje LSTM (na zbiorach train/val)
     teacher = torch.zeros_like(y)
     for k in ("train", "val"):
         teacher[idx[k]] = predict(lstm, seq_inputs, idx[k])
-    anfis_kd = ANFIS(feats_np[train_rows], args.n_mfs).to(device)
-    anfis_kd.fit_consequents_lse(lse_batches(feat_inputs, teacher, idx["train"]))
-    histories["anfis_distilled"] = fit(anfis_kd, feat_inputs, teacher, idx["train"], idx["val"],
-                                       epochs=args.epochs_anfis, lr=3e-3, name="ANFIS-KD", **common)
-    results["ANFIS destylowany z LSTM"] = metrics(predict(anfis_kd, feat_inputs, idx["test"]), y[idx["test"]])
+    anfis_kd_lse, anfis_kd = train_anfis("ANFIS destylowany z LSTM", teacher)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    torch.save({"state": lstm.state_dict(), "seq_mean": seq_mean, "seq_std": seq_std}, args.out / "lstm.pt")
+    torch.save({"n_members": args.n_lstm, "state": lstm.state_dict(), "seq_mean": seq_mean, "seq_std": seq_std},
+               args.out / "lstm.pt")
     for name, model in (("anfis", anfis), ("anfis_distilled", anfis_kd)):
         torch.save({"n_mfs": args.n_mfs, "n_inputs": len(ANFIS_FEATURES), "state": model.state_dict()},
                    args.out / f"{name}.pt")
-    (args.out / "metrics.json").write_text(json.dumps(results, indent=2, ensure_ascii=False))
-    (args.out / "history.json").write_text(json.dumps(histories, indent=2))
+    (args.out / "metrics.json").write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    (args.out / "history.json").write_text(json.dumps(histories, indent=2, ensure_ascii=False), encoding="utf-8")
     (args.out / "splits.json").write_text(json.dumps({k: v.tolist() for k, v in splits.items()}))
+    (args.out / "config.json").write_text(json.dumps(
+        {k: str(v) for k, v in vars(args).items()} | {"device": str(device)}, indent=2), encoding="utf-8")
+
+    # Predykcje testowe: z nich da się odtworzyć wszystkie wykresy (report.regenerate).
+    pred = df.loc[idx_np["test"], ["activity", "segment", "pos", "hr", *ANFIS_FEATURES[1:], TARGET]].reset_index(drop=True)
+    for name, p in test_pred.items():
+        pred[name] = p.cpu().numpy()
+    pred.to_parquet(args.out / "predictions.parquet")
+
+    rep = report.write_report(args.out, results, histories, pred, list(test_pred))
+    report.membership_functions({"ANFIS": (anfis_lse, anfis), "ANFIS-KD": (anfis_kd_lse, anfis_kd)},
+                                feats_np[train_rows], rep)
+    rules = {name: report.rules_table(m, feats[test]) for name, m in (("ANFIS", anfis), ("ANFIS-KD", anfis_kd))}
+    for name, t in rules.items():
+        t.to_csv(rep / f"reguly_{name}.csv", index=False)
+    report.rule_activation(rules, rep)
+    report.data_overview(df, idx_np, rep).to_csv(rep / "statystyki_danych.csv")
 
     print(f"\nTest ({len(idx_np['test'])} próbek), błąd prognozy tętna za 30 s [bpm]:")
     for name, m in results.items():
-        print(f"  {name:28s} MAE {m['mae']:5.2f}   RMSE {m['rmse']:5.2f}")
-    print(f"\nZapisano w {args.out}")
+        print(f"  {name:36s} MAE {m['mae']:5.2f}   RMSE {m['rmse']:5.2f}   R2 {m['r2']:5.3f}")
+    print(f"\nZapisano w {args.out}, wykresy i tabele w {rep}")
 
 
 if __name__ == "__main__":

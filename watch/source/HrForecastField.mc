@@ -7,8 +7,10 @@ import Toybox.WatchUi;
 //! Cechy liczone identycznie jak w src/hrforecast/features.py.
 class HrForecastField extends WatchUi.SimpleDataField {
 
+    private const WINDOW_S = 30;
     private const SPEED_WINDOW_S = 10;
-    private const SIZE = 31;  // WINDOW_S + 1 z features.py: bieżąca próbka i ta sprzed 30 s
+    private const SPEED_LONG_WINDOW_S = 60;
+    private const SIZE = 61;  // SPEED_LONG_WINDOW_S + 1 z features.py: ostatnie 60 s i próbka sprzed 30 s
     private const MIN_GRADE_DIST_M = 10.0;
     private const MAX_GRADE = 0.3;
 
@@ -51,17 +53,23 @@ class HrForecastField extends WatchUi.SimpleDataField {
             return "--";
         }
 
-        var old = (_head + 1) % SIZE;  // próbka sprzed 30 s
+        var old = (_head - WINDOW_S + SIZE) % SIZE;  // próbka sprzed 30 s
         var speedSum = 0.0;
-        for (var i = 0; i < SPEED_WINDOW_S; i++) {
-            speedSum += _speed[(_head - i + SIZE) % SIZE];
+        var speedLongSum = 0.0;
+        for (var i = 0; i < SPEED_LONG_WINDOW_S; i++) {
+            var s = _speed[(_head - i + SIZE) % SIZE];
+            if (i < SPEED_WINDOW_S) {
+                speedSum += s;
+            }
+            speedLongSum += s;
         }
         var dDist = _dist[_head] - _dist[old];
         var grade = (_alt[_head] - _alt[old]) / (dDist > MIN_GRADE_DIST_M ? dDist : MIN_GRADE_DIST_M);
         grade = grade > MAX_GRADE ? MAX_GRADE : (grade < -MAX_GRADE ? -MAX_GRADE : grade);
 
-        // Kolejność jak ANFIS_FEATURES: hr, hr_d30, speed10, grade30
-        var x = [_hr[_head], _hr[_head] - _hr[old], speedSum / SPEED_WINDOW_S, grade] as Array<Float>;
+        // Kolejność jak ANFIS_FEATURES: hr, hr_d30, speed10, speed60, grade30
+        var x = [_hr[_head], _hr[_head] - _hr[old], speedSum / SPEED_WINDOW_S,
+                 speedLongSum / SPEED_LONG_WINDOW_S, grade] as Array<Float>;
         return (_hr[_head] + Anfis.predict(x)).toNumber();
     }
 }

@@ -16,6 +16,7 @@ dependencies = [
 hr-prepare = "hrforecast.prepare:main"
 hr-train = "hrforecast.train:main"
 hr-export = "hrforecast.export_watch:main"
+hr-report = "hrforecast.report:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
