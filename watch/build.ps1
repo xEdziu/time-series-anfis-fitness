@@ -9,6 +9,6 @@ if (-not (Test-Path $key)) { throw "Brak $key - zobacz docs/GARMIN.md, krok 4." 
 
 New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot "bin") | Out-Null
 & "$sdk\bin\monkeyc.bat" -d $Device -f (Join-Path $PSScriptRoot "monkey.jungle") `
-    -o (Join-Path $PSScriptRoot "bin\HrForecast.prg") -y $key -w
+    -o (Join-Path $PSScriptRoot "bin\HrForecast.prg") -y $key -w -l 3
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "OK: watch\bin\HrForecast.prg ($Device)"
