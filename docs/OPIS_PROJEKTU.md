@@ -34,7 +34,7 @@ watch/bin/HrForecast.prg         ← pole danych na zegarek
 Komendy (Windows / PowerShell, w katalogu repozytorium):
 
 ```powershell
-uv sync                     # instalacja zależności (PyTorch z CUDA 12.8)
+uv sync                     # instalacja zależności (PyTorch z CUDA 13.0, sterownik NVIDIA >= 580)
 uv run pytest               # testy na danych syntetycznych
 uv run hr-prepare           # data/raw -> data/processed/samples.parquet
 uv run hr-train             # trening wszystkich modeli + raport

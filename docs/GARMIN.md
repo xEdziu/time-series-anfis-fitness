@@ -52,7 +52,7 @@ Skrypt wypisuje, ile sekund danych i ile aktywności każdego sportu znalazł.
 ## 3. Trening
 
 ```powershell
-uv sync                                   # PyTorch z CUDA 12.8 (wymagane dla RTX 50xx)
+uv sync                                   # PyTorch z CUDA 13.0 (RTX 50xx, sterownik >= 580)
 uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name())"
 uv run hr-train                           # domyślnie tylko bieganie; --sport all = wszystko
 uv run hr-online runs\<data>\anfis_distilled.pt   # dobór kroku douczania eta (odtworzenie na zbiorze testowym)
