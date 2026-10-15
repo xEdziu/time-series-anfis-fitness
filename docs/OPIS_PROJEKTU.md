@@ -22,9 +22,10 @@ data/processed/samples.parquet   ← szereg 1 Hz z cechami i celem
    │  hr-train     (train.py + lstm.py + anfis.py + report.py)
    ▼
 runs/<data-godzina>/             ← modele, metryki, predykcje, report/ z wykresami
+   │  hr-online    (online.py)        ← dobór kroku douczania eta na zbiorze testowym
    │  hr-export    (export_watch.py)
    ▼
-watch/source/AnfisParams.mc      ← parametry ANFIS jako stałe Monkey C
+watch/source/AnfisParams.mc      ← parametry ANFIS i stałe douczania jako stałe Monkey C
    │  watch/build.ps1
    ▼
 watch/bin/HrForecast.prg         ← pole danych na zegarek
@@ -38,7 +39,8 @@ uv run pytest               # testy na danych syntetycznych
 uv run hr-prepare           # data/raw -> data/processed/samples.parquet
 uv run hr-train             # trening wszystkich modeli + raport
 uv run hr-report runs\<data>   # ponowne narysowanie wykresów bez treningu
-uv run hr-export runs\<data>\anfis_distilled.pt   # model -> zegarek
+uv run hr-online runs\<data>\anfis_distilled.pt   # dobór kroku douczania na zegarku
+uv run hr-export runs\<data>\anfis_distilled.pt --eta <eta>   # model -> zegarek
 .\watch\build.ps1 -Device fenix847mm
 ```
 
@@ -55,10 +57,11 @@ Szczegóły pobierania danych z Garmina, budowania i wgrywania na zegarek: `docs
 | `src/hrforecast/anfis.py` | ANFIS Takagi–Sugeno 1. rzędu w PyTorch: gaussowskie funkcje przynależności, siatka reguł, krok LSE z algorytmu hybrydowego Janga. |
 | `src/hrforecast/train.py` | `hr-train`: podział danych, trening wszystkich modeli, ewaluacja na zbiorze testowym, zapis wyników, wywołanie raportu. |
 | `src/hrforecast/report.py` | Wszystkie wykresy i tabele do sprawozdania. `hr-report` odtwarza je z zapisanych plików, bez treningu. |
-| `src/hrforecast/export_watch.py` | `hr-export`: zapisuje parametry ANFIS jako stałe Monkey C. |
-| `watch/source/HrForecastField.mc` | Pole danych na zegarku: bufor ostatnich 61 s, liczenie cech na żywo, wyświetlanie `hr + prognoza`. |
-| `watch/source/Anfis.mc` | Wnioskowanie ANFIS w Monkey C (odpowiednik `ANFIS.forward`). |
-| `tests/test_pipeline.py` | Testy: wyrównanie celu w czasie, ANFIS uczy się lepiej niż persystencja, eksport na zegarek daje te same wyniki co PyTorch. |
+| `src/hrforecast/online.py` | Douczanie następników ANFIS znormalizowanym LMS, identyczne jak na zegarku. `hr-online` odtwarza je na zbiorze testowym dla kilku kroków `eta`. |
+| `src/hrforecast/export_watch.py` | `hr-export`: zapisuje parametry ANFIS i stałe douczania jako stałe Monkey C. |
+| `watch/source/HrForecastField.mc` | Pole danych na zegarku: bufor ostatnich 61 s, liczenie cech na żywo, prognoza, douczanie, skuteczność, ekran ze strefami i tempem. |
+| `watch/source/Anfis.mc` | ANFIS w Monkey C: regresory `phi`, prognoza `theta . phi` (odpowiednik `ANFIS.forward`) i krok douczania. |
+| `tests/test_pipeline.py` | Testy: wyrównanie celu w czasie, ANFIS uczy się lepiej niż persystencja, eksport na zegarek daje te same wyniki co PyTorch, krok LMS i kolejność douczania (tylko znane odpowiedzi). |
 
 ## 4. Dane, cechy i cel
 
@@ -212,12 +215,31 @@ na wykresie metryk i w tabelach, żeby nie zaśmiecać pozostałych wykresów.
 ## 8. Część na zegarku
 
 - `HrForecastField.mc` co sekundę dopisuje tętno, prędkość, wysokość i dystans do bufora 61 s,
-  liczy 5 cech **dokładnie tak jak `features.py`** i wyświetla `hr + ANFIS(cechy)`.
-  Przez pierwsze 60 s po starcie (lub po pauzie) pokazuje `--`, bo bufor się zapełnia.
+  liczy 5 cech **dokładnie tak jak `features.py`** i prognozuje `hr + ANFIS(cechy)`.
+  Przez pierwsze 60 s po starcie (lub po pauzie) prognoza to `--`, bo bufor się zapełnia.
+- Ekran (`DataField.onUpdate`, układ z 1 polem): łuk stref tętna z `UserProfile.getHeartRateZones`
+  dla bieżącego sportu (znacznik pełny = tętno teraz, pusty = prognoza), prognoza, tętno teraz ze strefą,
+  tempo ze średniej prędkości z 10 s oraz skuteczność od startu aktywności. W mniejszym polu tylko prognoza.
+  Opis dla użytkownika: `docs/GARMIN.md`, kroki 6–7.
 - `Anfis.mc` jest ogólny: liczba wejść i funkcji przynależności pochodzi z `AnfisParams.mc`.
+- **Douczanie online.** Przy ustalonych funkcjach przynależności wyjście ANFIS jest liniowe względem następników:
+  `y = theta . phi(x)`, `phi_r = wn_r · [z, 1]`. Zegarek doucza więc tylko następniki (192 liczby przy 5 wejściach
+  i 2 MF) znormalizowanym LMS: `theta += eta · e · phi / (phi·phi + eps)`, błąd `e` obcięty do ±15 bpm.
+  Krok dla prognozy z chwili `t` jest robiony w chwili `t + 30 s`, gdy prawdziwe tętno jest już znane, a prognoza
+  w chwili `t` używa tylko odpowiedzi znanych do `t` (ocena prequential, bez przecieku przyszłości).
+  RLS odpada, bo potrzebuje macierzy 192 × 192 i tyle samo operacji co sekundę.
+  Douczone `theta` trafia do `Application.Storage` razem z `MODEL_ID` (skrót parametrów modelu bazowego),
+  więc nowy eksport zaczyna od zera.
+- **Skuteczność na zegarku**: równolegle liczona jest prognoza modelu bazowego (`AnfisParams.CONSEQ`)
+  i naiwna (tętno się nie zmieni). Ekran pokazuje MAE wszystkich trzech od początku aktywności.
+- **`hr-online`** odtwarza ten sam algorytm na zbiorze testowym (`predictions.parquet` obok modelu) w dwóch wariantach:
+  z zapisem `theta` między biegami (jak na zegarku) i z każdym biegiem od modelu bazowego. Wynik zapisuje do
+  `runs/<data>/online_<model>.csv` i podpowiada `eta`. `eta = 0` to model bazowy, czyli ten sam wynik co w `metrics.json`.
+  Zbiór testowy to tylko kilka biegów, więc korzyść z douczania między biegami jest tu niedoszacowana.
 - **Niezmiennik**: każda zmiana cech w `features.py` wymaga tej samej zmiany w `HrForecastField.mc`,
   ponownego `hr-prepare`, `hr-train` i `hr-export`. Test `test_watch_export_matches_torch` sprawdza
-  zgodność wnioskowania, ale nie liczenia cech na zegarku.
+  zgodność wnioskowania, ale nie liczenia cech na zegarku. Tak samo każda zmiana douczania w `online.py`
+  (krok, obcięcie błędu, moment aktualizacji) wymaga tej samej zmiany w `Anfis.mc` i `HrForecastField.mc`.
 
 ## 9. Wyniki referencyjne
 

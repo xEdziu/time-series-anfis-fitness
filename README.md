@@ -27,6 +27,7 @@ src/hrforecast/
   prepare.py       hr-prepare: data/raw -> data/processed/samples.parquet
   train.py         hr-train: trening wszystkich modeli i metryki -> runs/<data>/
   report.py        wykresy i tabele do sprawozdania -> runs/<data>/report/ (hr-report odtwarza je bez treningu)
+  online.py        douczanie ANFIS na zegarku (LMS); hr-online dobiera krok uczenia na zbiorze testowym
   export_watch.py  hr-export: ANFIS -> watch/source/AnfisParams.mc
 watch/             pole danych Connect IQ (Monkey C) dla Fenixa 8
 docs/GARMIN.md     podłączenie zegarka, pobieranie danych, budowanie i wgrywanie
@@ -40,6 +41,7 @@ uv run pytest                 # testy na danych syntetycznych, w tym zgodność 
 # skopiuj pliki .fit do data/raw/  (docs/GARMIN.md)
 uv run hr-prepare
 uv run hr-train
-uv run hr-export runs\<data>\anfis_distilled.pt
+uv run hr-online runs\<data>\anfis_distilled.pt
+uv run hr-export runs\<data>\anfis_distilled.pt --eta <eta z hr-online>
 .\watch\build.ps1 -Device fenix847mm
 ```

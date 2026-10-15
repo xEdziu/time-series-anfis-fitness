@@ -55,10 +55,12 @@ Skrypt wypisuje, ile sekund danych i ile aktywności każdego sportu znalazł.
 uv sync                                   # PyTorch z CUDA 12.8 (wymagane dla RTX 50xx)
 uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name())"
 uv run hr-train                           # domyślnie tylko bieganie; --sport all = wszystko
-uv run hr-export runs\<data>\anfis_distilled.pt   # albo anfis.pt, jeśli wypadł lepiej
+uv run hr-online runs\<data>\anfis_distilled.pt   # dobór kroku douczania eta (odtworzenie na zbiorze testowym)
+uv run hr-export runs\<data>\anfis_distilled.pt --eta <eta z hr-online>   # albo anfis.pt, jeśli wypadł lepiej
 ```
 
-`hr-export` nadpisuje `watch/source/AnfisParams.mc` parametrami wytrenowanego modelu.
+`hr-export` nadpisuje `watch/source/AnfisParams.mc` parametrami wytrenowanego modelu i krokiem douczania.
+`--eta 0` wyłącza douczanie na zegarku.
 
 ## 4. Klucz dewelopera (raz)
 
@@ -99,7 +101,22 @@ W symulatorze:
 2. Uruchom timer aktywności (_Simulation → Activity Data → Timer: Start_ lub odpowiednik w Twojej wersji SDK).
    Pole pokazuje `--`, dopóki timer nie jest uruchomiony, a po starcie przez pierwsze 60 s, czyli do zapełnienia bufora (średnia prędkość z 60 s).
 
-To jest dobre demo na obronę: obok widać aktualne tętno, a pole „HR +30s” wyprzedza je o pół minuty.
+To jest dobre demo na obronę. Najlepiej ustawić pole jako jedyne na ekranie (układ z 1 polem), bo wtedy pokazuje:
+
+- **łuk stref tętna** wzdłuż krawędzi, z progami z profilu użytkownika dla bieżącego sportu:
+  pełny znacznik to tętno teraz, pusty to prognoza za 30 s,
+- **prognozę** (duża liczba), **tętno teraz** ze strefą i **tempo** (średnia z 10 s, min/km lub min/mi),
+- **skuteczność od startu aktywności**: `MAE` modelu douczanego, `baz` modelu bazowego (bez douczania),
+  `naiw` prognozy „tętno się nie zmieni” oraz odsetek prognoz z błędem ≤ 5 bpm.
+  Pierwsza ocena pojawia się po 91 s: 61 s na zapełnienie bufora + 30 s na poznanie prawdziwego tętna.
+
+W mniejszym polu (ekran z 2–4 polami) mieści się tylko prognoza.
+
+**Douczanie.** Co sekundę, gdy znane jest już prawdziwe tętno dla prognozy sprzed 30 s, pole robi jeden krok
+znormalizowanego LMS na następnikach ANFIS (`Anfis.learn`, ten sam algorytm co `src/hrforecast/online.py`).
+Douczone parametry są zapisywane w pamięci aplikacji co 5 minut, przy pauzie i na koniec aktywności,
+więc kolejny bieg zaczyna od nich. Wyeksportowanie innego modelu (`hr-export`) zaczyna douczanie od nowa.
+Uwaga: odtwarzanie pliku FIT w symulatorze też doucza model, ale w pamięci symulatora, a nie zegarka.
 
 ## 7. Wgranie na zegarek (sideload)
 
@@ -108,7 +125,25 @@ To jest dobre demo na obronę: obok widać aktualne tętno, a pole „HR +30s”
 3. Odłącz zegarek. Pole zostanie zainstalowane po chwili.
 4. Dodaj pole do ekranu aktywności: na ekranie startu biegu wejdź w _Menu (przytrzymaj środkowy lewy przycisk) →
    Ustawienia biegu → Ekrany danych → wybierz ekran → Edytuj pole → Connect IQ → HR Forecast_.
-   Najlepiej ustawić je obok zwykłego pola „Tętno”.
+   Najlepiej dodać osobny ekran z **układem 1 pola**: tylko wtedy widać łuk stref, tętno teraz, tempo
+   i skuteczność (krok 6). W mniejszym polu wyświetla się sama prognoza.
+
+Nową wersję wgrywasz tak samo: plik o tej samej nazwie zastępuje starą, a douczony model zostaje
+(chyba że zmienił się model bazowy, wtedy douczanie startuje od nowa).
+
+Co zobaczysz na pierwszym biegu: tętno, strefa i tempo pojawiają się od razu po starcie stopera,
+prognoza po 61 s, statystyki skuteczności po 91 s. Na początku `MAE` i `baz` są prawie równe,
+bo douczony model odróżnia się od bazowego dopiero po dłuższym czasie.
+
+### Gdy coś nie działa
+
+- **Pola nie ma na liście Connect IQ**: najczęściej plik zbudowano dla innego modelu. Zbuduj go ponownie z właściwym `-Device`.
+- **Zamiast pola widać „IQ!”**: pole uległo awarii. Utwórz pusty plik `GARMIN\Apps\LOGS\CIQ_LOG.YML`,
+  powtórz bieg, a w tym pliku pojawi się opis błędu z numerem linii.
+- **Brak łuku stref**: w profilu użytkownika na zegarku nie ma ustawionych stref tętna dla biegania.
 
 Aby odinstalować, usuń plik z `GARMIN\Apps\`.
+Pola wgranego ręcznie nie da się konfigurować w aplikacji Garmin Connect. Żeby **wyzerować douczanie**,
+usuń pole i wgraj je ponownie (usunięcie aplikacji kasuje jej pamięć) albo wyeksportuj inny model.
+Pole prosi o uprawnienie do profilu użytkownika, bo stamtąd bierze progi stref tętna.
 Pola danych wgrane w ten sposób nie przechodzą przez sklep Connect IQ i to wystarczy na potrzeby projektu.
