@@ -11,6 +11,7 @@ hybrydowego Janga), następnie wszystkie parametry dostrajane gradientowo (Adam)
 """
 
 import itertools
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -75,3 +76,22 @@ class ANFIS(nn.Module):
         z, wn = self.firing(x)
         f = z @ self.consequents[:, :-1].T + self.consequents[:, -1]  # (B, R)
         return (wn * f).sum(dim=1)
+
+
+def load_anfis(path: Path) -> ANFIS:
+    ckpt = torch.load(path, map_location="cpu")
+    model = ANFIS(np.zeros((2, ckpt["n_inputs"])), ckpt["n_mfs"])
+    model.load_state_dict(ckpt["state"])
+    return model
+
+
+def flat_params(model: ANFIS) -> dict[str, np.ndarray]:
+    """Parametry spłaszczone dokładnie tak, jak czyta je Anfis.mc."""
+    with torch.no_grad():
+        return {
+            "MEAN": model.mean.cpu().numpy(),
+            "STD": model.std.cpu().numpy(),
+            "CENTERS": model.centers.cpu().numpy().ravel(),  # [wejście][mf]
+            "SIGMAS": model.sigmas.cpu().numpy().ravel(),
+            "CONSEQ": model.consequents.cpu().numpy().ravel(),  # [reguła][p_1..p_n, q]
+        }

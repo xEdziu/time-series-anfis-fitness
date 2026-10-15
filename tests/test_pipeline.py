@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from hrforecast.anfis import ANFIS
-from hrforecast.export_watch import flat_params, to_monkey_c
+from hrforecast.anfis import ANFIS, flat_params
+from hrforecast.export_watch import to_monkey_c
 from hrforecast.features import ANFIS_FEATURES, HORIZON_S, TARGET, add_features, usable_mask
+from hrforecast.online import ERR_CLIP, nlms_step, regressors, replay
 from hrforecast.train import fit, lse_batches, predict
 
 
@@ -75,4 +76,33 @@ def test_watch_export_matches_torch():
     params = flat_params(model)
     got = np.array([watch_predict(params, 3, row.astype(np.float32)) for row in x[:20]])
     np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
-    assert "const CONSEQ = [" in to_monkey_c(model)
+    linear = regressors(params, 3, x[:20]) @ params["CONSEQ"]
+    np.testing.assert_allclose(linear, expected, rtol=1e-4, atol=1e-4)
+    code = to_monkey_c(model)
+    assert "const CONSEQ = [" in code and "const MODEL_ID = " in code
+
+
+def test_nlms_step_shrinks_error_and_clips():
+    rng = np.random.default_rng(0)
+    phi, theta = rng.normal(size=12), rng.normal(size=12)
+    e = 3.0 - phi @ theta
+    nlms_step(theta, phi, 3.0, eta=0.2)
+    np.testing.assert_allclose(3.0 - phi @ theta, 0.8 * e, rtol=1e-5)
+    before = theta.copy()
+    nlms_step(theta, phi, 1e6, eta=1.0)  # artefakt: krok jak dla błędu ERR_CLIP
+    np.testing.assert_allclose(phi @ (theta - before), ERR_CLIP, rtol=1e-5)
+
+
+def test_replay_learns_only_from_known_answers():
+    rng = np.random.default_rng(0)
+    n = 3 * HORIZON_S
+    phi, y = rng.normal(size=(n, 4)), rng.normal(size=n)
+    segment = np.r_[np.zeros(2 * HORIZON_S), np.ones(HORIZON_S)]
+    theta0 = rng.normal(size=4)
+    theta = theta0.copy()
+    pred = replay(phi, y, segment, np.arange(n), theta, eta=0.5)
+    # Przez pierwsze HORIZON_S s żadna odpowiedź nie jest znana, więc to model bazowy.
+    np.testing.assert_allclose(pred[:HORIZON_S], phi[:HORIZON_S] @ theta0)
+    assert not np.allclose(pred[HORIZON_S], phi[HORIZON_S] @ theta0)
+    # Po przerwie oczekujące odpowiedzi przepadają: w nowym segmencie theta już się nie zmienia.
+    np.testing.assert_allclose(pred[2 * HORIZON_S:], phi[2 * HORIZON_S:] @ theta)

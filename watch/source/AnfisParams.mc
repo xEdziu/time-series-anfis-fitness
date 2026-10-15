@@ -6,6 +6,12 @@ module AnfisParams {
     const N_INPUTS = 5;
     const N_MFS = 2;
     const HORIZON_S = 30;
+    const MODEL_ID = "60875cc44ec1";
+    // Douczanie online (src/hrforecast/online.py)
+    const ETA = 0.000000;
+    const ERR_CLIP = 15.000000;
+    const NLMS_EPS = 0.000001;
+    const HIT_BPM = 5.000000;
     const MEAN = [163.311646, 0.168613, 2.506432, 2.507258, 0.001045] as Array<Float>;
     const STD = [14.056399, 5.219698, 0.529157, 0.440534, 0.018883] as Array<Float>;
     const CENTERS = [-1.371789, 1.190273, -0.774425, 0.568716, -0.842339, 0.656675, -1.370786, 1.114088, -0.979160, 1.089631] as Array<Float>;
